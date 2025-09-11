@@ -47,8 +47,8 @@ jobs:
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
-        context: ./csweb
-        file: ./csweb/Dockerfile  # 使用主Dockerfile (ultra优化版本)
+        context: .
+        file: ./csweb/Dockerfile
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
@@ -56,45 +56,57 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
+    - name: Select a tag for runtime test
+      id: picktag
+      run: |
+        set -euo pipefail
+        FIRST_LINE="$(echo '${{ steps.meta.outputs.tags }}' | head -n1 | tr -d ' \t')"
+        if [ -z "${FIRST_LINE}" ]; then
+          echo "No tag parsed, fallback to latest" >&2
+          FULL_TEST_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        else
+          FULL_TEST_IMAGE="${FIRST_LINE}"
+        fi
+        echo "FULL_TEST_IMAGE=${FULL_TEST_IMAGE}" >> "$GITHUB_ENV"
+        echo "Testing will use image: ${FULL_TEST_IMAGE}"
+
     - name: Test Docker image
       run: |
-        # 测试镜像是否能正常启动
-        docker run --rm -d --name test-container \
-          -p 5002:5001 \
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        
-        # 等待服务启动
-        sleep 30
-        
-        # 健康检查
-        if curl -f http://localhost:5002/api/models; then
-          echo "✅ Docker image test passed"
-        else
-          echo "❌ Docker image test failed"
-          docker logs test-container
-          exit 1
-        fi
-        
-        # 清理测试容器
+        set -euo pipefail
+        echo "Testing image: ${FULL_TEST_IMAGE}"
+        docker pull "${FULL_TEST_IMAGE}" || echo "Image already local"
+        docker run --rm -d --name test-container -p 5002:5001 "${FULL_TEST_IMAGE}"
+        for i in $(seq 1 30); do
+          if curl -sf http://localhost:5002/api/models >/dev/null; then
+            echo "Health check passed"
+            break
+          fi
+          sleep 2
+          if [ "$i" = 30 ]; then
+            echo "Health check failed"
+            docker logs test-container || true
+            exit 1
+          fi
+        done
         docker stop test-container || true
 
     - name: Generate deployment info
       run: |
         echo "## 🚀 Deployment Information" >> $GITHUB_STEP_SUMMARY
-        echo "### Docker Image Tags:" >> $GITHUB_STEP_SUMMARY
+        echo "### Docker Image Used For Test:" >> $GITHUB_STEP_SUMMARY
+        echo "- ${FULL_TEST_IMAGE}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### All Tags:" >> $GITHUB_STEP_SUMMARY
         echo '${{ steps.meta.outputs.tags }}' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Quick Deploy Commands:" >> $GITHUB_STEP_SUMMARY
         echo '```bash' >> $GITHUB_STEP_SUMMARY
-        echo "# Pull the image" >> $GITHUB_STEP_SUMMARY
-        echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "# Run the container" >> $GITHUB_STEP_SUMMARY
+        echo "docker pull ${FULL_TEST_IMAGE}" >> $GITHUB_STEP_SUMMARY
         echo "docker run -d \\" >> $GITHUB_STEP_SUMMARY
         echo "  --name kronos-stock-app \\" >> $GITHUB_STEP_SUMMARY
         echo "  -p 5001:5001 \\" >> $GITHUB_STEP_SUMMARY
         echo "  -v \$(pwd)/prediction_results:/app/prediction_results \\" >> $GITHUB_STEP_SUMMARY
         echo "  -v \$(pwd)/cache:/app/cache \\" >> $GITHUB_STEP_SUMMARY
         echo "  --restart unless-stopped \\" >> $GITHUB_STEP_SUMMARY
-        echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+        echo "  ${FULL_TEST_IMAGE}" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
