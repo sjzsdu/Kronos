@@ -48,15 +48,13 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: ./csweb
-        file: ./csweb/Dockerfile
+        file: ./csweb/Dockerfile  # 使用主Dockerfile (ultra优化版本)
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        platforms: linux/amd64  # 移除ARM64避免编译问题
+        platforms: linux/amd64
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        build-args: |
-          BUILDKIT_INLINE_CACHE=1
 
     - name: Test Docker image
       run: |

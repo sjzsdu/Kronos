@@ -1,7 +1,7 @@
-# Docker files
-Dockerfile
-docker-compose.yml
-.dockerignore
+# Git and version control
+.git
+.gitignore
+.github/
 
 # Python
 __pycache__/
@@ -29,6 +29,7 @@ wheels/
 venv/
 env/
 ENV/
+.venv/
 
 # IDE
 .vscode/
@@ -58,8 +59,21 @@ cache/
 .env.local
 .env.production
 
+# Documentation
+*.md
+README.md
+DOCKER_DEPLOYMENT.md
+TRAEFIK_INTEGRATION.md
+
+# Docker files
+docker-compose*.yml
+deploy*.sh
+
 # Model files (too large for container)
 *.bin
 *.pt
 *.pth
 *.model
+
+# Local data
+prediction_results/
