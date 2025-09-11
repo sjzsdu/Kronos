@@ -28,8 +28,10 @@ RUN apt-get update && apt-get install -y \
     && apt-get autoremove -y \
     && apt-get clean
 
-# Copy application code
-COPY . .
+
+# Copy csweb app code and model code from project root context
+COPY csweb /app
+COPY model /app/model
 
 # Set environment variables
 ENV FLASK_APP=app.py \
