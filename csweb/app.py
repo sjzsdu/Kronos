@@ -11,15 +11,23 @@ import warnings
 import datetime
 warnings.filterwarnings('ignore')
 
-# Add project root directory to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+## Path adjustments: ensure local embedded model (csweb/model) is importable
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(CURRENT_DIR))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
+EMBEDDED_MODEL_DIR = os.path.join(CURRENT_DIR, 'model')
+if os.path.isdir(EMBEDDED_MODEL_DIR) and EMBEDDED_MODEL_DIR not in sys.path:
+    sys.path.insert(0, EMBEDDED_MODEL_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
 
 try:
-    from model import Kronos, KronosTokenizer, KronosPredictor
+    from model import Kronos, KronosTokenizer, KronosPredictor  # model may come from embedded bridge
     MODEL_AVAILABLE = True
-except ImportError:
+except Exception as e:
     MODEL_AVAILABLE = False
-    print("Warning: Kronos model cannot be imported, will use simulated data for demonstration")
+    print(f"Warning: Kronos model import failed: {e}. Using simulated data.")
 
 try:
     from china_stock_data import StockData

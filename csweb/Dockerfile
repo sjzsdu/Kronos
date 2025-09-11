@@ -35,7 +35,14 @@ COPY csweb /app
 COPY model /app/model
 
 ## Verify model directory presence (non-fatal)
-RUN if [ ! -d /app/model ]; then echo "[WARN] /app/model missing. Kronos model import will fail."; else ls -al /app/model; fi
+RUN if [ ! -d /app/model ]; then \
+            echo "[ERROR] /app/model missing. Build context likely wrong (should be repo root)."; \
+            echo "[INFO] Listing /app to help debug:"; ls -al /app; \
+            exit 1; \
+        else \
+            echo "[INFO] /app/model contents:"; ls -al /app/model; \
+            echo "[INFO] Looking for kronos.py:"; find /app/model -maxdepth 2 -name 'kronos.py' -print || true; \
+        fi
 
 # Set environment variables
 ENV FLASK_APP=app.py \
