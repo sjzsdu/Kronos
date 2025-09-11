@@ -1,0 +1,22 @@
+# Web framework
+flask==2.3.3
+flask-cors==4.0.0
+
+# Data processing
+pandas>=2.2.3,<3.0.0
+numpy>=1.26.0
+
+# Visualization
+plotly==5.17.0
+
+# AI/ML
+torch>=2.1.0
+huggingface_hub==0.33.1
+
+# Stock data
+china_stock_data
+akshare
+
+# Additional dependencies for Kronos
+transformers
+datasets
