@@ -2,8 +2,6 @@ import os
 import pandas as pd
 import numpy as np
 import json
-import plotly.graph_objects as go
-import plotly.utils
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import sys

@@ -77,3 +77,8 @@ deploy*.sh
 
 # Local data
 prediction_results/
+csweb/prediction_results/
+webui/prediction_results/
+
+# Examples cache
+examples/cache/
