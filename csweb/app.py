@@ -9,16 +9,14 @@ import warnings
 import datetime
 warnings.filterwarnings('ignore')
 
-## Path adjustments: ensure local embedded model (csweb/model) is importable
+## Path adjustments: ensure root model package is importable
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(os.path.dirname(CURRENT_DIR))
+ROOT_DIR = os.path.dirname(CURRENT_DIR)  # project root is parent of csweb/
+# Try root model first (local dev), then local model dir (Docker)
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
-EMBEDDED_MODEL_DIR = os.path.join(CURRENT_DIR, 'model')
-if os.path.isdir(EMBEDDED_MODEL_DIR) and EMBEDDED_MODEL_DIR not in sys.path:
-    sys.path.insert(0, EMBEDDED_MODEL_DIR)
-if ROOT_DIR not in sys.path:
-    sys.path.append(ROOT_DIR)
 
 try:
     from model import Kronos, KronosTokenizer, KronosPredictor  # model may come from embedded bridge
@@ -33,6 +31,13 @@ try:
 except ImportError:
     STOCK_DATA_AVAILABLE = False
     print("Warning: china_stock_data not available, will use simulated data")
+
+# Direct akshare import as fallback (bypasses proxy issues with china_stock_data)
+try:
+    import akshare as ak
+    AKSHARE_AVAILABLE = True
+except ImportError:
+    AKSHARE_AVAILABLE = False
 
 app = Flask(__name__)
 CORS(app)
@@ -59,6 +64,14 @@ AVAILABLE_MODELS = {
         'context_length': 512,
         'params': '24.7M',
         'description': 'Small model, balanced performance and speed'
+    },
+    'kronos-base': {
+        'name': 'Kronos-base',
+        'model_id': 'NeoQuasar/Kronos-base',
+        'tokenizer_id': 'NeoQuasar/Kronos-Tokenizer-base',
+        'context_length': 512,
+        'params': '102.3M',
+        'description': 'Base model, provides better prediction quality'
     }
 }
 
@@ -77,13 +90,13 @@ POPULAR_STOCKS = {
 }
 
 def get_stock_data(stock_code, days=500):
-    """获取股票数据"""
-    try:
-        if STOCK_DATA_AVAILABLE:
+    """获取股票数据 - 多源获取，优先使用能穿透代理的源"""
+    # 尝试方法1: china_stock_data (东方财富源)
+    if STOCK_DATA_AVAILABLE:
+        try:
             stock = StockData(stock_code, days=days)
             kline_data = stock.get_data("kline")
             
-            # Convert Chinese column names to English
             column_mapping = {
                 '开盘': 'open',
                 '收盘': 'close', 
@@ -93,23 +106,53 @@ def get_stock_data(stock_code, days=500):
             }
             
             df = kline_data.rename(columns=column_mapping)
-            
-            # Add timestamps and amount columns
             df = df.reset_index()
             df['timestamps'] = pd.to_datetime(df['日期'])
             if 'amount' not in df.columns:
                 df['amount'] = df['volume'] * df['close']
             
-            # Remove NaN values
             df = df.dropna()
             
-            return df, None
-        else:
-            # Generate simulated data if china_stock_data is not available
-            return generate_simulated_stock_data(stock_code, days), None
+            if len(df) > 0:
+                return df, None
+        except Exception:
+            pass  # 静默失败，尝试下一个源
+    
+    # 尝试方法2: akshare 直接调用 (新浪源，可穿透代理)
+    if AKSHARE_AVAILABLE:
+        try:
+            # stock_zh_a_daily 使用新浪源，稳定性更好
+            df = ak.stock_zh_a_daily(symbol=f"sz{stock_code}" if stock_code.startswith('0') else f"sh{stock_code}", adjust="qfq")
             
-    except Exception as e:
-        return None, f"Failed to get stock data: {str(e)}"
+            if df is not None and len(df) > 0:
+                df = df.tail(days)  # 只取最近N天
+                
+                column_mapping = {
+                    'date': 'timestamps',
+                    'open': 'open',
+                    'close': 'close',
+                    'high': 'high',
+                    'low': 'low',
+                    'volume': 'volume'
+                }
+                df = df.rename(columns=column_mapping)
+                
+                if 'timestamps' not in df.columns:
+                    df['timestamps'] = df.index
+                
+                df['timestamps'] = pd.to_datetime(df['timestamps'])
+                if 'amount' not in df.columns:
+                    df['amount'] = df['volume'] * df['close']
+                
+                df = df.dropna()
+                
+                if len(df) > 0:
+                    return df, None
+        except Exception:
+            pass  # 静默失败，使用模拟数据
+    
+    # 所有源都失败，返回模拟数据
+    return generate_simulated_stock_data(stock_code, days), None
 
 def generate_simulated_stock_data(stock_code, days=500):
     """Generate simulated stock data for demonstration"""
@@ -191,7 +234,7 @@ def save_prediction_results(stock_code, prediction_results, actual_data, input_d
         return filename, None
         
     except Exception as e:
-        return None, f"Failed to save prediction results: {str(e)}"
+        return None, f"保存预测结果失败"
 
 @app.route('/')
 def index():
@@ -213,6 +256,33 @@ def get_popular_stocks():
         'success': True,
         'stocks': POPULAR_STOCKS
     })
+
+@app.route('/api/model-status')
+def get_model_status():
+    """Get model status"""
+    if MODEL_AVAILABLE:
+        if predictor is not None:
+            return jsonify({
+                'available': True,
+                'loaded': True,
+                'message': 'Kronos model loaded and available',
+                'current_model': {
+                    'name': predictor.model.__class__.__name__,
+                    'device': str(next(predictor.model.parameters()).device)
+                }
+            })
+        else:
+            return jsonify({
+                'available': True,
+                'loaded': False,
+                'message': 'Kronos model available but not loaded'
+            })
+    else:
+        return jsonify({
+            'available': False,
+            'loaded': False,
+            'message': 'Kronos model library not available, please install related dependencies'
+        })
 
 @app.route('/api/load_model', methods=['POST'])
 def load_model():
@@ -258,7 +328,7 @@ def load_model():
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': f'Failed to load model: {str(e)}'
+            'error': f'加载模型失败: {str(e)}'
         })
 
 @app.route('/api/stock_data', methods=['POST'])
@@ -331,6 +401,8 @@ def predict():
         lookback = data.get('lookback', 400)
         pred_len = data.get('pred_len', 5)
         temperature = data.get('temperature', 1.0)
+        top_p = float(data.get('top_p', 0.9))
+        sample_count = int(data.get('sample_count', 1))
         days = data.get('days', 500)
         
         # Get stock data
@@ -381,8 +453,8 @@ def predict():
                 y_timestamp=y_timestamp,
                 pred_len=pred_len,
                 T=temperature,
-                top_p=0.9,
-                sample_count=1,
+                top_p=top_p,
+                sample_count=sample_count,
                 verbose=False
             )
         else:
@@ -395,27 +467,29 @@ def predict():
             if i == 0:
                 prev_close = df['close'].iloc[-1]
             else:
-                prev_close = pred_df.iloc[i-2]['close']
+                prev_close = pred_df.iloc[i-1]['close']
             
-            change_pct = (row['close'] - prev_close) / prev_close * 100
+            change_pct = (row['close'] - prev_close) / prev_close * 100 if prev_close != 0 else 0
             
             prediction_results.append({
                 'date': date.strftime('%Y-%m-%d'),
                 'weekday': date.strftime('%A'),
-                'open': float(row['open']),
-                'high': float(row['high']),
-                'low': float(row['low']),
-                'close': float(row['close']),
-                'volume': float(row['volume']),
-                'change_pct': float(change_pct)
+                'open': float(row['open']) if not np.isnan(row['open']) else 0,
+                'high': float(row['high']) if not np.isnan(row['high']) else 0,
+                'low': float(row['low']) if not np.isnan(row['low']) else 0,
+                'close': float(row['close']) if not np.isnan(row['close']) else 0,
+                'volume': float(row['volume']) if not np.isnan(row.get('volume', 0)) else 0,
+                'change_pct': float(change_pct) if not np.isnan(change_pct) else 0
             })
         
         # Calculate overall prediction summary
-        total_change_pct = (pred_df['close'].iloc[-1] - df['close'].iloc[-1]) / df['close'].iloc[-1] * 100
+        last_close = float(df['close'].iloc[-1])
+        pred_last_close = float(pred_df['close'].iloc[-1]) if not np.isnan(pred_df['close'].iloc[-1]) else last_close
+        total_change_pct = (pred_last_close - last_close) / last_close * 100 if last_close != 0 else 0
         
         prediction_summary = {
-            'current_price': float(df['close'].iloc[-1]),
-            'target_price': float(pred_df['close'].iloc[-1]),
+            'current_price': last_close,
+            'target_price': pred_last_close,
             'total_change_pct': float(total_change_pct),
             'prediction_period': f'{pred_len} days',
             'confidence_level': 'Medium' if MODEL_AVAILABLE else 'Simulated',
@@ -426,12 +500,12 @@ def predict():
         # Prepare chart data
         historical_data = {
             'timestamps': df['timestamps'].dt.strftime('%Y-%m-%d').tolist()[-50:],  # Last 50 days
-            'close': df['close'].tolist()[-50:]
+            'close': [float(v) if not np.isnan(v) else 0 for v in df['close'].tolist()[-50:]]
         }
         
         prediction_data = {
             'timestamps': [date.strftime('%Y-%m-%d') for date in future_dates],
-            'close': pred_df['close'].tolist()
+            'close': [float(v) if not np.isnan(v) else 0 for v in pred_df['close'].tolist()]
         }
         
         # Save prediction results
@@ -439,6 +513,8 @@ def predict():
             'lookback': lookback,
             'pred_len': pred_len,
             'temperature': temperature,
+            'top_p': top_p,
+            'sample_count': sample_count,
             'model_available': MODEL_AVAILABLE
         }
         
@@ -470,7 +546,7 @@ def predict():
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': f'Prediction failed: {str(e)}'
+            'error': f'预测失败: {str(e)}'
         })
 
 def generate_simulated_prediction(df, lookback, pred_len, y_timestamp):

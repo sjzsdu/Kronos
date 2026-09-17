@@ -56,6 +56,7 @@
             padding: 25px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             height: fit-content;
+            overflow: hidden;
         }
 
         .control-panel h2 {
@@ -153,6 +154,9 @@
             border-radius: 8px;
             margin-bottom: 20px;
             font-weight: 500;
+            word-break: break-all;
+            overflow-wrap: break-word;
+            max-width: 100%;
         }
 
         .status.success {
@@ -285,11 +289,11 @@
         }
 
         .prediction-summary .metric .value.positive {
-            color: #38a169;
+            color: #e53e3e;
         }
 
         .prediction-summary .metric .value.negative {
-            color: #e53e3e;
+            color: #38a169;
         }
 
         .prediction-table {
@@ -312,11 +316,11 @@
         }
 
         .prediction-table .positive {
-            color: #38a169;
+            color: #e53e3e;
         }
 
         .prediction-table .negative {
-            color: #e53e3e;
+            color: #38a169;
         }
 
         .stock-list {
@@ -480,6 +484,19 @@
                     <small class="form-text">控制预测随机性，数值越高预测越多样化，越低越保守</small>
                 </div>
 
+                <div class="form-group">
+                    <label for="top-p">核采样参数 (top_p):</label>
+                    <input type="range" id="top-p" value="0.9" min="0.1" max="1.0" step="0.1">
+                    <span id="top-p-value">0.9</span>
+                    <small class="form-text">控制预测多样性，数值越高考虑的概率分布越广</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="sample-count">采样次数:</label>
+                    <input type="number" id="sample-count" value="1" min="1" max="5" step="1">
+                    <small class="form-text">生成多个预测样本以提高质量（建议1-3次）</small>
+                </div>
+
                 <button id="predict-btn" class="btn btn-success" disabled>
                     🎯 开始预测
                 </button>
@@ -565,6 +582,7 @@
             await loadPopularStocks();
             setupEventListeners();
             updateTemperatureDisplay();
+            updateTopPDisplay();
         }
 
         // Load available models
@@ -649,6 +667,7 @@
             document.getElementById('load-stock-btn').addEventListener('click', loadStockData);
             document.getElementById('predict-btn').addEventListener('click', makePrediction);
             document.getElementById('temperature').addEventListener('input', updateTemperatureDisplay);
+            document.getElementById('top-p').addEventListener('input', updateTopPDisplay);
             document.getElementById('stock-code').addEventListener('change', function() {
                 currentStockCode = this.value;
             });
@@ -658,6 +677,12 @@
         function updateTemperatureDisplay() {
             const temperature = document.getElementById('temperature').value;
             document.getElementById('temperature-value').textContent = temperature;
+        }
+
+        // Update top_p display
+        function updateTopPDisplay() {
+            const topP = document.getElementById('top-p').value;
+            document.getElementById('top-p-value').textContent = topP;
         }
 
         // Load model
@@ -685,11 +710,12 @@
                     showStatus('success', data.message);
                     document.getElementById('predict-btn').disabled = false;
                 } else {
-                    showStatus('error', data.error);
+                    const errMsg = data.error.length > 80 ? data.error.substring(0, 80) + '...' : data.error;
+                    showStatus('error', errMsg);
                 }
                 
             } catch (error) {
-                showStatus('error', `加载模型失败: ${error.message}`);
+                showStatus('error', '加载模型失败，请检查模型文件');
             } finally {
                 showLoading(false);
             }
@@ -722,11 +748,12 @@
                     showStatus('success', `成功获取${stockCode}的股票数据`);
                     document.getElementById('predict-btn').disabled = false;
                 } else {
-                    showStatus('error', data.error);
+                    const errMsg = data.error.length > 80 ? data.error.substring(0, 80) + '...' : data.error;
+                    showStatus('error', errMsg);
                 }
                 
             } catch (error) {
-                showStatus('error', `获取股票数据失败: ${error.message}`);
+                showStatus('error', '获取股票数据失败，请检查网络连接');
             } finally {
                 showLoading(false);
             }
@@ -741,6 +768,8 @@
                 const lookback = parseInt(document.getElementById('lookback').value);
                 const predLen = parseInt(document.getElementById('pred-len').value);
                 const temperature = parseFloat(document.getElementById('temperature').value);
+                const topP = parseFloat(document.getElementById('top-p').value);
+                const sampleCount = parseInt(document.getElementById('sample-count').value);
                 const days = parseInt(document.getElementById('data-days').value);
                 
                 const response = await axios.post('/api/predict', {
@@ -748,6 +777,8 @@
                     lookback: lookback,
                     pred_len: predLen,
                     temperature: temperature,
+                    top_p: topP,
+                    sample_count: sampleCount,
                     days: days
                 });
                 
@@ -764,11 +795,12 @@
                         showStatus('success', '预测完成!');
                     }
                 } else {
-                    showStatus('error', data.error);
+                    const errMsg = data.error.length > 80 ? data.error.substring(0, 80) + '...' : data.error;
+                    showStatus('error', errMsg);
                 }
                 
             } catch (error) {
-                showStatus('error', `预测失败: ${error.message}`);
+                showStatus('error', '预测失败，请稍后重试');
             } finally {
                 showLoading(false);
             }
@@ -849,9 +881,14 @@
 
         // Render prediction chart
         function renderPredictionChart(chartData) {
+            if (!chartData || !chartData.historical || !chartData.prediction) {
+                console.error('Invalid chart data');
+                return;
+            }
+            
             const historicalTrace = {
-                x: chartData.historical.timestamps,
-                y: chartData.historical.close,
+                x: chartData.historical.timestamps || [],
+                y: chartData.historical.close || [],
                 type: 'scatter',
                 mode: 'lines',
                 name: '历史价格',
@@ -859,8 +896,8 @@
             };
             
             const predictionTrace = {
-                x: chartData.prediction.timestamps,
-                y: chartData.prediction.close,
+                x: chartData.prediction.timestamps || [],
+                y: chartData.prediction.close || [],
                 type: 'scatter',
                 mode: 'lines+markers',
                 name: '预测价格',
